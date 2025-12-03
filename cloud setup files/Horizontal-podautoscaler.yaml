@@ -1,0 +1,59 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: whiteboard-app-hpa
+  # Horizontal Pod Autoscaler for the `whiteboard-app` Deployment. This
+  # autoscaler will adjust the number of pod replicas based on observed
+  # CPU and memory utilization.
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: whiteboard-app
+  minReplicas: 3
+  maxReplicas: 10
+  # `minReplicas` ensures a baseline of pods to handle minimum load and
+  # provide redundancy. `maxReplicas` caps autoscaling during traffic spikes.
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+        # Target average CPU utilization across all pods (percentage).
+        # When the cluster observes sustained average CPU above this value,
+        # the HPA will scale up (subject to maxReplicas).
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+        # Target average memory utilization. Note: memory-based scaling can
+        # be less responsive because memory doesn't decrease predictably.
+        # Use with care and test behavior under real workloads.
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: haproxy-hpa
+  # HPA for the HAProxy deployment to scale proxy capacity with load.
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: haproxy
+  minReplicas: 2
+  maxReplicas: 5
+  # Keep at least two HAProxy replicas for availability in case of node
+  # failure; allow scaling up to handle increased concurrent connections.
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+        # CPU-based scaling for HAProxy; tune this value based on observed
+        # proxy CPU usage and connection patterns.

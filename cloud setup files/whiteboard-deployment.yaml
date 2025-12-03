@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whiteboard-app
+  # Deployment for the Whiteboard application. Adjust `replicas` to scale
+  # the number of pod replicas running the app.
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: whiteboard
+  template:
+    metadata:
+      labels:
+        app: whiteboard
+    spec:
+      containers:
+      - name: whiteboard
+        # The container image to run.
+        image: furthest5/whiteboard:v1
+        # Ensure Kubernetes always attempts to pull the image 
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        env:
+        - name: MONGODB_URI
+          # Pull the MongoDB URI from a Kubernetes Secret named `whiteboard-secrets`.
+          valueFrom:
+            secretKeyRef:
+              name: whiteboard-secrets
+              key: mongodb-uri
+              optional: false
+        - name: MONGODB_DATABASE
+          # Database name used by the application also sourced from the secret
+          valueFrom:
+            secretKeyRef:
+              name: whiteboard-secrets
+              key: mongodb-database
+              optional: false
+        - name: REDIS_HOST
+          # Redis connection information is also sourced from the secret
+          valueFrom:
+            secretKeyRef:
+              name: whiteboard-secrets
+              key: redis-host
+              optional: false
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: whiteboard-secrets
+              key: redis-password
+              optional: false
+        - name: REDIS_PORT
+          valueFrom:
+            secretKeyRef:
+              name: whiteboard-secrets
+              key: redis-port
+              optional: false

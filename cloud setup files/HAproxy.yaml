@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-config
+  # This ConfigMap contains the haproxy configuration used by the
+  # `haproxy` Deployment below. The ConfigMap mounts the file to the
+  # container and HAProxy reads `/usr/local/etc/haproxy/haproxy.cfg`.
+data:
+  haproxy.cfg: |
+    # Global settings
+    # -------------------------
+    # Controls global HAProxy behaviour and logging
+    global
+      maxconn 4096
+      log stdout format raw local0
+    
+    # Defaults
+    # -------------------------
+    # Default settings applied to all frontends/backends unless overridden
+    defaults
+      mode http
+      timeout connect 5000ms
+      timeout client 50000ms
+      timeout server 50000ms
+      log global
+    
+    # Frontends
+    # -------------------------
+    # Frontend for the application HTTP traffic
+    # Listens on port 8080 inside the cluster and forwards to the app backend
+    # (service `whiteboard-service` in the `default` namespace)
+    frontend http-in
+      bind *:8080
+      mode http
+      default_backend whiteboard-backend
+    
+    # Frontend for MongoDB TCP traffic
+    # HAProxy will forward TCP connections for MongoDB to the mongodb backend
+    frontend mongodb-in
+      bind *:27017
+      mode tcp
+      option tcplog
+      default_backend mongodb-backend
+    
+    # Backends
+    # -------------------------
+    # Backend for the whiteboard application (HTTP)
+    backend whiteboard-backend
+      mode http
+      balance roundrobin
+      # Points to the cluster DNS name for the service; keep the port in sync
+      server whiteboard1 whiteboard-service.default.svc.cluster.local:80 check
+    
+    # Backend for MongoDB (TCP)
+    backend mongodb-backend
+      mode tcp
+      balance roundrobin
+      option tcp-check
+      server mongos1 mongodb-router:27017 check
+    
+    # HAProxy stats (monitoring)
+    # -------------------------
+    listen stats
+      bind *:8404
+      mode http
+      stats enable
+      stats uri /stats
+      stats refresh 10s
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy
+  # Deployment that runs HAProxy as a pod. It mounts the ConfigMap above
+  # and exposes HTTP (app), stats and MongoDB TCP ports via the Service.
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: haproxy
+  template:
+    metadata:
+      labels:
+        app: haproxy
+    spec:
+      containers:
+      - name: haproxy
+        image: haproxy:2.8-alpine
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8404
+          name: stats
+        - containerPort: 27017
+          name: mongodb
+        volumeMounts:
+        - name: config
+          # Mount the haproxy.cfg file stored in the `haproxy-config` ConfigMap
+          # into the container path HAProxy expects.
+          mountPath: /usr/local/etc/haproxy/haproxy.cfg
+          subPath: haproxy.cfg
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+      volumes:
+      - name: config
+        configMap:
+          name: haproxy-config
+          # The ConfigMap must provide a key named `haproxy.cfg` which will
+          # be mounted as a file into the container via the volumeMount above.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-lb
+spec:
+  type: LoadBalancer
+  selector:
+    app: haproxy
+  ports:
+  - port: 80
+    targetPort: 8080
+    name: http
+  - port: 8404
+    targetPort: 8404
+    name: stats
+  - port: 27017
+    targetPort: 27017
+    name: mongodb
+  # Service exposes HAProxy externally (LoadBalancer); port 80 forwards to
+  # container port 8080. The LB will vary by cloud provider — on Azure this
+  # provisions an external IP to reach the HAProxy frontend.

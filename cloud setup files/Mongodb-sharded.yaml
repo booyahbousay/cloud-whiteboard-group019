@@ -1,0 +1,183 @@
+
+
+
+# Config Server StatefulSet
+# ---------------------------
+# The Config Server stores metadata for the sharded cluster. In production
+# you should run a config server replica set (3 members). For local/dev use
+# a single replica to simplify setup.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb-configdb
+spec:
+  serviceName: mongodb-configdb
+  # Single replica here for simplicity; increase to 3 for production
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb-configdb
+  template:
+    metadata:
+      labels:
+        app: mongodb-configdb
+    spec:
+      containers:
+      - name: mongodb
+        image: mongo:6.0
+        # Start mongod as a config server and join the config replica set
+        command:
+        - mongod
+        - --configsvr
+        - --replSet
+        - configReplSet
+        - --port
+        - "27019"
+        # Bind to all interfaces inside the pod so other pods can connect
+        - --bind_ip_all
+        ports:
+        - containerPort: 27019
+---
+---
+
+# Shard 1
+# ---------------------------
+# A headless Service and StatefulSet implement the first shard's replica
+# set. Headless services (clusterIP: None) allow StatefulSet pods to be
+# addressed by stable DNS names (e.g. mongodb-shard1-0.mongodb-shard1.default.svc).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-shard1
+spec:
+  clusterIP: None
+  selector:
+    app: mongodb-shard1
+  ports:
+  - port: 27017
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb-shard1
+spec:
+  serviceName: mongodb-shard1
+  # Single replica used for dev/testing; production shards should be
+  # replica sets with multiple members and persistent storage
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb-shard1
+  template:
+    metadata:
+      labels:
+        app: mongodb-shard1
+    spec:
+      containers:
+      - name: mongodb
+        image: mongo:6.0
+        # Start mongod as a shard server and join the shard replica set
+        command:
+        - mongod
+        - --shardsvr
+        - --replSet
+        - shard1
+        - --bind_ip_all
+        ports:
+        - containerPort: 27017
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+---
+---
+# ---------------------------
+# Shard 2
+# ---------------------------
+# Second shard definition, same pattern as shard1. Keep names unique so the
+# mongod processes are correctly addressed by the router (mongos).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-shard2
+spec:
+  clusterIP: None
+  selector:
+    app: mongodb-shard2
+  ports:
+  - port: 27017
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb-shard2
+spec:
+  serviceName: mongodb-shard2
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb-shard2
+  template:
+    metadata:
+      labels:
+        app: mongodb-shard2
+    spec:
+      containers:
+      - name: mongodb
+        image: mongo:6.0
+        command:
+        - mongod
+        - --shardsvr
+        - --replSet
+        - shard2
+        - --bind_ip_all
+        ports:
+        - containerPort: 27017
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+---
+---
+# ---------------------------
+# Mongos Router Deployment
+# ---------------------------
+# The mongos process acts as the routing/query layer for a sharded cluster.
+# It does not store data; it routes operations to the appropriate shard
+# members based on the cluster metadata stored in the config servers.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-router
+spec:
+  # Run one mongos instance for routing; scale as needed for read throughput
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb-router
+  template:
+    metadata:
+      labels:
+        app: mongodb-router
+    spec:
+      containers:
+      - name: mongos
+        image: mongo:6.0
+        # Configure mongos to use the config server replica set and connect
+        # to the config server pod. Note the DNS name uses StatefulSet pod
+        # naming: <statefulset>-<ordinal>.<service>.<namespace>.svc.cluster.local
+        command:
+        - mongos
+        - --configdb
+        - configReplSet/mongodb-configdb-0.mongodb-configdb.default.svc.cluster.local:27019
+        - --bind_ip_all
+        ports:
+        - containerPort: 27017
+
+# End of MongoDB sharded manifest
